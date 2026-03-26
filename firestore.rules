@@ -1,0 +1,170 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    // Collection: users
+    // Fields: email, displayName, role, isInternal, vendorId, createdAt, updatedAt
+    //
+    // Collection: vendors
+    // Fields: vendorCode, legalName, displayName, dbaName, website, businessType, taxId, status, ownerUserId, ownerDisplayName, primaryBusinessAddress, mailingAddress, returnsAddress, shipFromAddress, notesInternal, tags, activeBrandCount, searchText, normalizedName, searchKeywords, customFields, createdAt, createdByUserId, updatedAt, updatedByUserId, archivedAt, archivedByUserId, isArchived
+    //
+    // Collection: brands
+    // Fields: vendorId, vendorName, brandName, brandCode, status, ownerUserId, ownerDisplayName, defaultPricingProfileKey, defaultPricingProfileVersion, defaultOperationalProfileKey, defaultOperationalProfileVersion, currentQuoteId, currentQuoteNumber, currentQuoteStatus, currentAgreementId, currentAgreementNumber, currentAgreementStatus, currentWbHandoffId, currentWbStatus, approvedSiteIds, approvedSiteCodes, approvedSiteNames, primarySignerContactId, primaryExternalContactId, notesInternal, searchText, normalizedName, searchKeywords, customFields, createdAt, createdByUserId, updatedAt, updatedByUserId, archivedAt, archivedByUserId, isArchived
+    //
+    // Collection: siteApprovals
+    // Fields: vendorId, brandId, siteId, siteCode, siteName, status, selectedAt, selectedByUserId, approvedAt, approvedByUserId, effectiveDate, endDate, goLiveReady, restrictionNotes, notesInternal, createdAt, createdByUserId, updatedAt, updatedByUserId, archivedAt, archivedByUserId, isArchived
+    //
+    // Collection: brandContactAssignments
+    // Fields: vendorId, brandId, contactId, roleKeys, isPrimary, createdAt, createdByUserId, updatedAt, updatedByUserId, archivedAt, archivedByUserId, isArchived
+    //
+    // Collection: contacts
+    // Fields: vendorId, firstName, lastName, displayName, email, normalizedEmail, phone, jobTitle, status, linkedUserId, notesInternal, searchText, normalizedName, searchKeywords, customFields, createdAt, createdByUserId, updatedAt, updatedByUserId, archivedAt, archivedByUserId, isArchived
+    //
+    // Collection: sites
+    // Fields: code, name, isActive
+    //
+    // Collection: quotes
+    // Fields: quoteNumber, vendorId, brandId, status, version, createdAt, updatedAt
+    //
+    // Collection: agreements
+    // Fields: agreementNumber, vendorId, brandId, status, version, signedAt, createdAt, updatedAt
+    //
+    // Collection: wbHandoffs
+    // Fields: brandId, status, assignedUserId, completedAt, createdAt, updatedAt
+    // ===============================================================
+
+    // Helper Functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isInternal() {
+      return isAuthenticated() && 
+        (request.auth.token.email.matches(".*@shiekhshoes.org$") ||
+         request.auth.token.email == 'theo@shiekhshoes.org' ||
+         request.auth.token.email == 'theo@shiekh.com' ||
+         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isInternal == true));
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && 
+        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['internal_admin', 'system_owner']) ||
+         (request.auth.token.email == 'theo@shiekhshoes.org'));
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isVendorUser(vendorId) {
+      return isAuthenticated() && 
+        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
+        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.vendorId == vendorId;
+    }
+
+    // Rules
+    match /users/{userId} {
+      allow read: if isOwner(userId) || isAdmin();
+      allow create, update: if isAdmin() || isOwner(userId);
+    }
+
+    match /vendors/{vendorId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /brands/{brandId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /contacts/{contactId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /siteApprovals/{approvalId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /brandContactAssignments/{assignmentId} {
+      allow read, write: if isAuthenticated();
+    }
+
+    match /sites/{siteId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /services/{serviceId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /fees/{feeId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /pricingProfiles/{profileId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /operationalProfiles/{profileId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /requiredFieldRules/{ruleId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /customFieldDefinitions/{defId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /quotes/{quoteId} {
+      allow read: if isInternal() || isVendorUser(resource.data.vendorId) || resource.data.status in ['ready_to_send', 'sent', 'viewed', 'changes_requested', 'accepted'];
+      allow write: if isAdmin();
+    }
+
+    match /agreements/{agreementId} {
+      allow read: if isInternal() || isVendorUser(resource.data.vendorId) || resource.data.status in ['ready_to_send', 'sent', 'viewed', 'changes_requested', 'awaiting_signature', 'signed'];
+      allow write: if isAdmin();
+    }
+
+    match /wbHandoffs/{handoffId} {
+      allow read, write: if isInternal();
+    }
+
+    match /domainAllowlist/{domainId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /emailAllowlist/{emailId} {
+      allow read: if isAuthenticated();
+      allow write: if isAdmin();
+    }
+
+    match /accessLinks/{linkId} {
+      allow read: if isAdmin();
+      allow write: if false; // Managed via API routes
+    }
+
+    match /accessAssignments/{assignmentId} {
+      allow read: if isAdmin() || (isAuthenticated() && (resource.data.recipientEmail == request.auth.token.email || resource.data.contactId == request.auth.uid));
+      allow write: if isAdmin();
+    }
+
+    match /activityLogs/{logId} {
+      allow read: if isAdmin();
+      allow create: if true; // Allow system and API routes to log events
+      allow update, delete: if false;
+    }
+  }
+}

@@ -1,0 +1,20 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isInternal() {
+      return isAuthenticated() && 
+        (request.auth.token.email.matches(".*@shiekhshoes.org$") ||
+         request.auth.token.email == 'theo@shiekhshoes.org' ||
+         request.auth.token.email == 'theo@shiekh.com');
+    }
+
+    match /documents/{allPaths=**} {
+      allow read: if isAuthenticated();
+      allow write: if isInternal();
+    }
+  }
+}
