@@ -61,13 +61,6 @@ export async function seedAllowlists() {
     const domainAllowlist = collection(db, 'domainAllowlist');
     const emailAllowlist = collection(db, 'emailAllowlist');
 
-    // Seed Domains
-    await setDoc(doc(domainAllowlist, 'shiekhshoes.org'), {
-      domain: 'shiekhshoes.org',
-      role: 'internal_admin',
-      createdAt: serverTimestamp(),
-    });
-
     // Seed Emails
     await setDoc(doc(emailAllowlist, 'theo_shiekh_com'), {
       email: 'theo@shiekh.com',
@@ -78,6 +71,13 @@ export async function seedAllowlists() {
     await setDoc(doc(emailAllowlist, 'theo_shiekhshoes_org'), {
       email: 'theo@shiekhshoes.org',
       role: 'system_owner',
+      createdAt: serverTimestamp(),
+    });
+
+    // Seed Domains
+    await setDoc(doc(domainAllowlist, 'shiekhshoes.org'), {
+      domain: 'shiekhshoes.org',
+      role: 'internal_admin',
       createdAt: serverTimestamp(),
     });
 

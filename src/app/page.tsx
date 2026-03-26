@@ -2,10 +2,33 @@
 
 import React from 'react';
 import Link from 'next/link';
-import { ArrowRight, ShieldCheck, LayoutDashboard, Users, Zap } from 'lucide-react';
+import { ArrowRight, ShieldCheck, LayoutDashboard, Users, Zap, Database } from 'lucide-react';
 import { motion } from 'motion/react';
+import { seedAllowlists } from '@/lib/seed-data';
+import { auth } from '@/lib/auth-service';
 
 export default function RootPage() {
+  const [isSeeding, setIsSeeding] = React.useState(false);
+  const [seedStatus, setSeedStatus] = React.useState<string | null>(null);
+
+  const handleSeed = async () => {
+    if (!auth.currentUser) {
+      setSeedStatus('Error: Must be logged in to seed.');
+      return;
+    }
+    setIsSeeding(true);
+    setSeedStatus('Seeding...');
+    try {
+      await seedAllowlists();
+      setSeedStatus('Seed Successful!');
+    } catch (err: any) {
+      console.error(err);
+      setSeedStatus(`Seed Failed: ${err.message}`);
+    } finally {
+      setIsSeeding(false);
+    }
+  };
+
   React.useEffect(() => {
     console.log('RootPage mounted - Terms Workbench Gateway starting...');
   }, []);
@@ -38,7 +61,7 @@ export default function RootPage() {
 
         <div className="flex flex-col sm:flex-row items-center justify-center gap-4 pt-4">
           <Link 
-            href="/dashboard"
+            href="/internal-login"
             className="w-full sm:w-auto bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-2xl font-bold shadow-2xl shadow-blue-600/40 transition-all flex items-center justify-center gap-2 group"
           >
             Enter Admin Dashboard
@@ -51,6 +74,23 @@ export default function RootPage() {
             Vendor Sign In
             <ArrowRight className="w-5 h-5" />
           </Link>
+        </div>
+
+        {/* Hidden Seed Button for Dev */}
+        <div className="pt-4 flex flex-col items-center gap-2">
+          <button 
+            onClick={handleSeed}
+            disabled={isSeeding}
+            className="text-[10px] text-slate-700 hover:text-slate-500 font-bold uppercase tracking-[0.2em] flex items-center gap-2 transition-colors opacity-20 hover:opacity-100"
+          >
+            <Database className="w-3 h-3" />
+            {isSeeding ? 'Seeding...' : 'Initialize System Data'}
+          </button>
+          {seedStatus && (
+            <p className={`text-[10px] font-bold uppercase tracking-widest ${seedStatus.includes('Error') || seedStatus.includes('Failed') ? 'text-rose-500' : 'text-emerald-500'}`}>
+              {seedStatus}
+            </p>
+          )}
         </div>
 
         <div className="pt-12 grid grid-cols-1 md:grid-cols-3 gap-8 text-left">

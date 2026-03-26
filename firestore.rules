@@ -1,170 +1,160 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
+
     // ===============================================================
     // Assumed Data Model
     // ===============================================================
-    // Collection: users
-    // Fields: email, displayName, role, isInternal, vendorId, createdAt, updatedAt
     //
     // Collection: vendors
-    // Fields: vendorCode, legalName, displayName, dbaName, website, businessType, taxId, status, ownerUserId, ownerDisplayName, primaryBusinessAddress, mailingAddress, returnsAddress, shipFromAddress, notesInternal, tags, activeBrandCount, searchText, normalizedName, searchKeywords, customFields, createdAt, createdByUserId, updatedAt, updatedByUserId, archivedAt, archivedByUserId, isArchived
+    // Fields: legalName (string), status (string), createdAt (timestamp), updatedAt (timestamp)
     //
     // Collection: brands
-    // Fields: vendorId, vendorName, brandName, brandCode, status, ownerUserId, ownerDisplayName, defaultPricingProfileKey, defaultPricingProfileVersion, defaultOperationalProfileKey, defaultOperationalProfileVersion, currentQuoteId, currentQuoteNumber, currentQuoteStatus, currentAgreementId, currentAgreementNumber, currentAgreementStatus, currentWbHandoffId, currentWbStatus, approvedSiteIds, approvedSiteCodes, approvedSiteNames, primarySignerContactId, primaryExternalContactId, notesInternal, searchText, normalizedName, searchKeywords, customFields, createdAt, createdByUserId, updatedAt, updatedByUserId, archivedAt, archivedByUserId, isArchived
-    //
-    // Collection: siteApprovals
-    // Fields: vendorId, brandId, siteId, siteCode, siteName, status, selectedAt, selectedByUserId, approvedAt, approvedByUserId, effectiveDate, endDate, goLiveReady, restrictionNotes, notesInternal, createdAt, createdByUserId, updatedAt, updatedByUserId, archivedAt, archivedByUserId, isArchived
-    //
-    // Collection: brandContactAssignments
-    // Fields: vendorId, brandId, contactId, roleKeys, isPrimary, createdAt, createdByUserId, updatedAt, updatedByUserId, archivedAt, archivedByUserId, isArchived
-    //
-    // Collection: contacts
-    // Fields: vendorId, firstName, lastName, displayName, email, normalizedEmail, phone, jobTitle, status, linkedUserId, notesInternal, searchText, normalizedName, searchKeywords, customFields, createdAt, createdByUserId, updatedAt, updatedByUserId, archivedAt, archivedByUserId, isArchived
-    //
-    // Collection: sites
-    // Fields: code, name, isActive
+    // Fields: vendorId (string), brandName (string), status (string)
     //
     // Collection: quotes
-    // Fields: quoteNumber, vendorId, brandId, status, version, createdAt, updatedAt
+    // Fields: quoteNumber (string), vendorId (string), brandId (string), status (string), versionNumber (string), createdAt (timestamp)
     //
     // Collection: agreements
-    // Fields: agreementNumber, vendorId, brandId, status, version, signedAt, createdAt, updatedAt
+    // Fields: agreementNumber (string), vendorId (string), brandId (string), status (string), createdAt (timestamp)
     //
-    // Collection: wbHandoffs
-    // Fields: brandId, status, assignedUserId, completedAt, createdAt, updatedAt
+    // Collection: accessLinks
+    // Fields: tokenHash (string), entityId (string), entityType (string), recipientEmail (string), status (string), expiresAt (timestamp), currentUseCount (int)
+    //
+    // Collection: userProfiles
+    // Fields: email (string), displayName (string), isInternal (bool), role (string), vendorId (string)
+    //
+    // Collection: activityLogs
+    // Fields: action (string), timestamp (timestamp), details (map)
+    //
     // ===============================================================
 
+    // ===============================================================
     // Helper Functions
+    // ===============================================================
+
     function isAuthenticated() {
       return request.auth != null;
-    }
-
-    function isInternal() {
-      return isAuthenticated() && 
-        (request.auth.token.email.matches(".*@shiekhshoes.org$") ||
-         request.auth.token.email == 'theo@shiekhshoes.org' ||
-         request.auth.token.email == 'theo@shiekh.com' ||
-         (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.isInternal == true));
-    }
-
-    function isAdmin() {
-      return isAuthenticated() && 
-        ((exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-          get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['internal_admin', 'system_owner']) ||
-         (request.auth.token.email == 'theo@shiekhshoes.org'));
     }
 
     function isOwner(userId) {
       return isAuthenticated() && request.auth.uid == userId;
     }
 
-    function isVendorUser(vendorId) {
-      return isAuthenticated() && 
-        exists(/databases/$(database)/documents/users/$(request.auth.uid)) &&
-        get(/databases/$(database)/documents/users/$(request.auth.uid)).data.vendorId == vendorId;
+    function isAdmin() {
+      return isAuthenticated() &&
+        (get(/databases/$(database)/documents/userProfiles/$(request.auth.uid)).data.role == 'administrator' ||
+          (request.auth.token.email == "theo@shiekhshoes.org" && request.auth.token.email_verified == true));
     }
 
-    // Rules
-    match /users/{userId} {
-      allow read: if isOwner(userId) || isAdmin();
-      allow create, update: if isAdmin() || isOwner(userId);
+    function isInternal() {
+      return isAuthenticated() && get(/databases/$(database)/documents/userProfiles/$(request.auth.uid)).data.isInternal == true;
     }
+
+    function isVendorUser(vendorId) {
+      return isAuthenticated() && get(/databases/$(database)/documents/userProfiles/$(request.auth.uid)).data.vendorId == vendorId;
+    }
+
+    function hasRequiredFields(fields) {
+      return request.resource.data.keys().hasAll(fields);
+    }
+
+    function hasOnlyAllowedFields(fields) {
+      return request.resource.data.keys().hasOnly(fields);
+    }
+
+    function uidNotModified() {
+      return !('uid' in request.resource.data) || request.resource.data.uid == resource.data.uid;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidVendor(data) {
+      return data.legalName is string && data.legalName.size() > 0 && data.legalName.size() < 200 &&
+             data.status in ['active', 'pending', 'inactive'];
+    }
+
+    function isValidBrand(data) {
+      return data.vendorId is string && data.brandName is string && data.brandName.size() > 0 &&
+             data.status in ['active', 'inactive'];
+    }
+
+    function isValidQuote(data) {
+      return data.quoteNumber is string && data.vendorId is string && data.brandId is string &&
+             data.status in ['draft', 'sent', 'accepted', 'rejected', 'expired'];
+    }
+
+    function isValidAgreement(data) {
+      return data.agreementNumber is string && data.vendorId is string && data.brandId is string &&
+             data.status in ['draft', 'sent', 'signed', 'void'];
+    }
+
+    function isValidAccessLink(data) {
+      return data.tokenHash is string && data.entityId is string && data.entityType in ['quote', 'agreement'] &&
+             data.recipientEmail is string && data.status in ['active', 'superseded', 'expired'];
+    }
+
+    function isValidUserProfile(data) {
+      return data.email is string && data.isInternal is bool &&
+             (!('displayName' in data) || (data.displayName is string && data.displayName.size() < 100)) &&
+             (!('role' in data) || (data.role is string && data.role.size() < 50)) &&
+             (!('vendorId' in data) || (data.vendorId is string));
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
 
     match /vendors/{vendorId} {
-      allow read, write: if isAuthenticated();
+      allow read: if isInternal() || isVendorUser(vendorId);
+      allow create, update: if isInternal() && isValidVendor(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     match /brands/{brandId} {
-      allow read, write: if isAuthenticated();
-    }
-
-    match /contacts/{contactId} {
-      allow read, write: if isAuthenticated();
-    }
-
-    match /siteApprovals/{approvalId} {
-      allow read, write: if isAuthenticated();
-    }
-
-    match /brandContactAssignments/{assignmentId} {
-      allow read, write: if isAuthenticated();
-    }
-
-    match /sites/{siteId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    match /services/{serviceId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    match /fees/{feeId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    match /pricingProfiles/{profileId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    match /operationalProfiles/{profileId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    match /requiredFieldRules/{ruleId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    match /customFieldDefinitions/{defId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow read: if isInternal() || isVendorUser(resource.data.vendorId);
+      allow create, update: if isInternal() && isValidBrand(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     match /quotes/{quoteId} {
-      allow read: if isInternal() || isVendorUser(resource.data.vendorId) || resource.data.status in ['ready_to_send', 'sent', 'viewed', 'changes_requested', 'accepted'];
-      allow write: if isAdmin();
+      allow read: if isInternal() || isVendorUser(resource.data.vendorId);
+      allow create, update: if isInternal() && isValidQuote(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     match /agreements/{agreementId} {
-      allow read: if isInternal() || isVendorUser(resource.data.vendorId) || resource.data.status in ['ready_to_send', 'sent', 'viewed', 'changes_requested', 'awaiting_signature', 'signed'];
-      allow write: if isAdmin();
-    }
-
-    match /wbHandoffs/{handoffId} {
-      allow read, write: if isInternal();
-    }
-
-    match /domainAllowlist/{domainId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
-    }
-
-    match /emailAllowlist/{emailId} {
-      allow read: if isAuthenticated();
-      allow write: if isAdmin();
+      allow read: if isInternal() || isVendorUser(resource.data.vendorId);
+      allow create, update: if isInternal() && isValidAgreement(request.resource.data);
+      allow delete: if isAdmin();
     }
 
     match /accessLinks/{linkId} {
-      allow read: if isAdmin();
-      allow write: if false; // Managed via API routes
+      // Access links are primarily read by the backend (admin SDK) or via specific token validation
+      // But we allow internal users to manage them
+      allow read: if isInternal();
+      allow create, update: if isInternal() && isValidAccessLink(request.resource.data);
+      allow delete: if isAdmin();
     }
 
-    match /accessAssignments/{assignmentId} {
-      allow read: if isAdmin() || (isAuthenticated() && (resource.data.recipientEmail == request.auth.token.email || resource.data.contactId == request.auth.uid));
-      allow write: if isAdmin();
+    match /userProfiles/{userId} {
+      allow read: if isOwner(userId) || isInternal();
+      allow create: if (isOwner(userId) && request.resource.data.isInternal == false) || isAdmin();
+      allow update: if (isOwner(userId) && request.resource.data.isInternal == resource.data.isInternal && request.resource.data.role == resource.data.role) || isAdmin();
+      allow delete: if isAdmin();
     }
 
     match /activityLogs/{logId} {
-      allow read: if isAdmin();
-      allow create: if true; // Allow system and API routes to log events
-      allow update, delete: if false;
+      allow read: if isInternal();
+      allow create: if isAuthenticated(); // Allow logging from various actions
+      allow update, delete: if isAdmin();
+    }
+
+    // Default deny
+    match /{path=**} {
+      allow read, write: if false;
     }
   }
 }

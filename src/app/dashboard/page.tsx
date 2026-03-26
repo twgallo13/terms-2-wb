@@ -65,7 +65,7 @@ export default function DashboardPage() {
     <AppShell rightRail={rightRail}>
       <PageHeader 
         title="Terms Workbench Dashboard" 
-        subtitle="Welcome back, Theo. Here's what needs your attention today."
+        subtitle="Welcome back. Here's what needs your attention today."
         actions={
           <button className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-bold shadow-lg shadow-blue-600/20 transition-all flex items-center gap-2">
             <UserPlus className="w-4 h-4" />

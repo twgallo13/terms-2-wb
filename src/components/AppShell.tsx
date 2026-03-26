@@ -20,8 +20,9 @@ import {
   X
 } from 'lucide-react';
 import { cn } from './ui/Primitives';
-import { logout } from '@/lib/auth-service';
+import { logout, auth, getUserProfile } from '@/lib/auth-service';
 import { useRouter } from 'next/navigation';
+import { onAuthStateChanged } from 'firebase/auth';
 
 const navItems = [
   { label: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
@@ -38,16 +39,59 @@ const navItems = [
 export default function AppShell({ children, rightRail }: { children: React.ReactNode; rightRail?: React.ReactNode }) {
   const pathname = usePathname();
   const [isSidebarOpen, setIsSidebarOpen] = React.useState(true);
+  const [isLoading, setIsLoading] = React.useState(true);
+  const [userProfile, setUserProfile] = React.useState<any>(null);
   const router = useRouter();
+
+  React.useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
+      if (!user) {
+        router.push('/internal-login');
+        return;
+      }
+
+      if (!user.emailVerified) {
+        router.push('/internal-login');
+        return;
+      }
+
+      try {
+        const profile = await getUserProfile(user.uid);
+        if (!profile || !profile.isInternal) {
+          // If not internal, they might be a vendor or unauthorized
+          router.push('/login');
+          return;
+        }
+        setUserProfile(profile);
+        setIsLoading(false);
+      } catch (error) {
+        console.error('Error fetching user profile:', error);
+        router.push('/internal-login');
+      }
+    });
+
+    return () => unsubscribe();
+  }, [router]);
 
   const handleSignOut = async () => {
     try {
       await logout();
-      router.push('/login');
+      router.push('/internal-login');
     } catch (error) {
       console.error('Logout failed:', error);
     }
   };
+
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
+        <div className="flex flex-col items-center gap-4">
+          <div className="w-12 h-12 border-4 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
+          <p className="text-sm font-medium text-slate-500">Verifying access...</p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-50 flex">
@@ -122,11 +166,11 @@ export default function AppShell({ children, rightRail }: { children: React.Reac
             <div className="h-8 w-px bg-slate-200 mx-1"></div>
             <div className="flex items-center gap-3">
               <div className="text-right hidden sm:block">
-                <p className="text-sm font-bold text-slate-900 leading-none">Theo Shiekh</p>
-                <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wider mt-1">Administrator</p>
+                <p className="text-sm font-bold text-slate-900 leading-none">{userProfile?.displayName || 'User'}</p>
+                <p className="text-[10px] font-medium text-slate-500 uppercase tracking-wider mt-1">{userProfile?.role?.replace('_', ' ') || 'Administrator'}</p>
               </div>
               <div className="w-9 h-9 bg-slate-200 rounded-full border-2 border-white shadow-sm flex items-center justify-center text-slate-600 font-bold overflow-hidden">
-                TS
+                {userProfile?.displayName?.split(' ').map((n: string) => n[0]).join('') || 'U'}
               </div>
             </div>
           </div>

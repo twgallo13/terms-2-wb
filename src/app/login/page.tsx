@@ -4,7 +4,7 @@ import React, { useState } from 'react';
 import PublicShell from '@/components/PublicShell';
 import { Mail, Lock, ArrowRight, Send, CheckCircle2 } from 'lucide-react';
 import Link from 'next/link';
-import { loginWithEmail, bootstrapInternalUser, sendSignInLink } from '@/lib/auth-service';
+import { loginWithEmail, sendSignInLink } from '@/lib/auth-service';
 import { useRouter } from 'next/navigation';
 
 export default function LoginPage() {

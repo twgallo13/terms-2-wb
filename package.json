@@ -35,6 +35,8 @@
     "@types/node": "^22.14.0",
     "autoprefixer": "^10.4.21",
     "cross-env": "^10.1.0",
+    "eslint": "^9.39.4",
+    "eslint-config-next": "^16.2.1",
     "firebase-tools": "^15.11.0",
     "tailwindcss": "^4.1.14",
     "typescript": "~5.8.2"

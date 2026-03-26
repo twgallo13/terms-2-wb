@@ -16,15 +16,44 @@ import {
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from './firebase';
 
+export { auth, db, functions };
+
 export async function bootstrapInternalUser() {
-  console.log('Calling bootstrapUser');
+  console.log('[AuthService] Initiating bootstrapInternalUser');
+  
+  if (!auth.currentUser) {
+    console.error('[AuthService] Bootstrap failed: No authenticated user found.');
+    throw new Error(JSON.stringify({ error: 'UNAUTHENTICATED', message: 'User must be logged in to bootstrap.' }));
+  }
+
+  if (!auth.currentUser.emailVerified) {
+    console.error('[AuthService] Bootstrap failed: Email not verified.', { email: auth.currentUser.email });
+    throw new Error(JSON.stringify({ error: 'UNVERIFIED_EMAIL', message: 'Email must be verified before provisioning.' }));
+  }
+
   try {
+    console.log('[AuthService] Calling bootstrapUser Cloud Function...', { uid: auth.currentUser.uid, email: auth.currentUser.email });
     const bootstrap = httpsCallable(functions, 'bootstrapUser');
     const result = await bootstrap();
-    console.log('bootstrapUser result:', result);
-    return result.data as { status: string; role?: string };
+    console.log('[AuthService] bootstrapUser Cloud Function success:', result.data);
+    
+    const data = result.data as { status: string; role?: string };
+    if (data.status === 'denied') {
+      console.warn('[AuthService] Bootstrap denied by server policy.');
+      throw new Error(JSON.stringify({ error: 'ACCESS_DENIED', message: 'Your account is not authorized for internal access.' }));
+    }
+    
+    return data;
   } catch (error: any) {
-    console.error('bootstrapUser error:', error);
+    console.error('[AuthService] bootstrapUser Cloud Function error:', {
+      code: error.code,
+      message: error.message,
+      details: error.details
+    });
+    
+    if (error.code === 'permission-denied') {
+      throw new Error(JSON.stringify({ error: 'PERMISSION_DENIED', message: error.message }));
+    }
     throw error;
   }
 }
@@ -191,14 +220,15 @@ export async function resetPassword(email: string) {
   await sendPasswordResetEmail(auth, email);
 }
 
-export async function sendSignInLink(email: string) {
+export async function sendSignInLink(email: string, redirectUrl?: string) {
   const actionCodeSettings = {
-    url: `${window.location.origin}/vendor/login/callback`,
+    url: redirectUrl || `${window.location.origin}/vendor/login/callback`,
     handleCodeInApp: true,
   };
   await sendSignInLinkToEmail(auth, email, actionCodeSettings);
   window.localStorage.setItem('emailForSignIn', email);
 }
+
 
 export async function signInWithLink(email: string, link: string) {
   if (isSignInWithEmailLink(auth, link)) {
