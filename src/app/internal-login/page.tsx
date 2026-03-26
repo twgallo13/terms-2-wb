@@ -3,26 +3,30 @@
 import React, { useState, useEffect } from 'react';
 import PublicShell from '@/components/PublicShell';
 import { Mail, Send, CheckCircle2, ShieldAlert, LogIn, AlertCircle } from 'lucide-react';
-import { sendSignInLink, auth } from '@/lib/auth-service';
+import { sendSignInLink, auth, bootstrapInternalUser } from '@/lib/auth-service';
 import { useRouter } from 'next/navigation';
 import { GoogleAuthProvider, signInWithPopup } from 'firebase/auth';
 
 export default function InternalLoginPage() {
   const [isLoading, setIsLoading] = useState(false);
+  const [isProvisioning, setIsProvisioning] = useState(false);
   const [error, setError] = useState<{ title: string; message: string } | null>(null);
   const [email, setEmail] = useState('');
   const [isEmailLinkSent, setIsEmailLinkSent] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
-    // If already logged in and verified, go to dashboard
+    // We no longer auto-redirect here to avoid race conditions.
+    // Redirects are handled explicitly after successful provisioning
+    // in the Google flow or the email-link callback flow.
     const unsubscribe = auth.onAuthStateChanged((user) => {
-      if (user && user.emailVerified) {
-        router.push('/dashboard');
+      // Just track auth state if needed, but don't auto-redirect to dashboard.
+      if (user && !user.emailVerified) {
+        console.log('[InternalLogin] User logged in but email not verified.');
       }
     });
     return () => unsubscribe();
-  }, [router]);
+  }, []);
 
   const mapAuthError = (err: any) => {
     console.error('Auth Error:', err);
@@ -45,13 +49,51 @@ export default function InternalLoginPage() {
   };
 
   const handleGoogleSignIn = async () => {
+    if (isLoading || isProvisioning) return;
     setIsLoading(true);
     setError(null);
     try {
       const provider = new GoogleAuthProvider();
       provider.setCustomParameters({ prompt: 'select_account' });
       await signInWithPopup(auth, provider);
-      // onAuthStateChanged will handle the redirect
+      console.log('Google sign-in popup succeeded');
+      
+      setIsProvisioning(true);
+      console.log('Calling bootstrapInternalUser()');
+      
+      try {
+        const result = await bootstrapInternalUser();
+        console.log('bootstrapInternalUser() returned:', result);
+        
+        console.log('Redirecting to /dashboard');
+        router.push('/dashboard');
+      } catch (err: any) {
+        console.error('[InternalLogin] bootstrap after Google sign-in failed:', err);
+        setIsProvisioning(false);
+        try {
+          const parsed = typeof err.message === 'string' ? JSON.parse(err.message) : err;
+          if (parsed && parsed.error === 'ACCESS_DENIED') {
+            setError({ 
+              title: 'Access Denied', 
+              message: parsed.message || 'Your account is not authorized for internal access.' 
+            });
+            return;
+          }
+          if (parsed && parsed.error === 'UNVERIFIED_EMAIL') {
+            setError({ 
+              title: 'Email Unverified', 
+              message: 'Please verify your email before proceeding.' 
+            });
+            return;
+          }
+        } catch (e) {
+          // silent parse fail
+        }
+        setError({ 
+          title: 'Provisioning Failed', 
+          message: 'Unable to provision your internal account. Please try again or contact the system owner.' 
+        });
+      }
     } catch (err: any) {
       setError(mapAuthError(err));
     } finally {
@@ -146,16 +188,25 @@ export default function InternalLoginPage() {
         <div className="space-y-4">
           <button 
             onClick={handleGoogleSignIn}
-            disabled={isLoading}
+            disabled={isLoading || isProvisioning}
             className="w-full bg-white border border-slate-200 hover:bg-slate-50 text-slate-700 py-3 rounded-xl text-sm font-bold transition-all flex items-center justify-center gap-3 disabled:opacity-50"
           >
-            <svg className="w-5 h-5" viewBox="0 0 24 24">
-              <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
-              <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
-              <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
-              <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
-            </svg>
-            Sign in with Google
+            {isProvisioning ? (
+              <>
+                <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin" />
+                Provisioning Account...
+              </>
+            ) : (
+              <>
+                <svg className="w-5 h-5" viewBox="0 0 24 24">
+                  <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" />
+                  <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" />
+                  <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l3.66-2.84z" />
+                  <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" />
+                </svg>
+                Sign in with Google
+              </>
+            )}
           </button>
 
           <div className="relative">

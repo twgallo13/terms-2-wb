@@ -1,12 +1,17 @@
 import * as functions from 'firebase-functions/v1';
 import * as admin from 'firebase-admin';
 import * as crypto from 'crypto';
+import * as corsModule from 'cors';
+
+const cors = corsModule({ origin: true });
 
 admin.initializeApp();
 
+const FIRESTORE_DB_ID = 'ai-studio-7f7e1759-b77e-4f63-8e6f-59ee278b22ac';
+
 // Log account creation (unverified)
 export const onUserCreate = functions.auth.user().onCreate(async (user) => {
-  const db = admin.firestore('twg-db-terms');
+  const db = admin.firestore(FIRESTORE_DB_ID);
   await db.collection('activityLogs').add({
     userId: user.uid,
     email: user.email,
@@ -15,6 +20,109 @@ export const onUserCreate = functions.auth.user().onCreate(async (user) => {
     timestamp: admin.firestore.FieldValue.serverTimestamp(),
   });
 });
+
+// Core provisioning logic shared between onCall and onRequest handlers
+async function provisionUserCore(uid: string, email: string, emailVerified: boolean, displayName: string) {
+  const db = admin.firestore(FIRESTORE_DB_ID);
+  const domain = email.split('@')[1];
+
+  // 1. Check if already provisioned
+  const userDoc = await db.collection('users').doc(uid).get();
+  if (userDoc.exists && userDoc.data()?.role) {
+    console.log('[Bootstrap] User already provisioned.', { uid, email, role: userDoc.data()?.role });
+    return { status: 'already_provisioned', role: userDoc.data()?.role };
+  }
+
+  // 2. Require Email Verification
+  if (!emailVerified) {
+    console.warn('[Bootstrap] Email not verified.', { uid, email });
+    await db.collection('activityLogs').add({
+      userId: uid,
+      email: email,
+      action: 'PROVISIONING_SKIPPED_UNVERIFIED',
+      details: { domain },
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    throw new functions.https.HttpsError('failed-precondition', 'Email must be verified before provisioning.', {
+      error: 'UNVERIFIED_EMAIL',
+      message: 'Your email address is not yet verified. Please click the link in your inbox.'
+    });
+  }
+
+  // 3. Check Email Allowlist (System Owners)
+  const emailSnap = await db.collection('emailAllowlist')
+    .where('email', '==', email)
+    .limit(1)
+    .get();
+
+  if (!emailSnap.empty) {
+    const role = emailSnap.docs[0].data().role || 'system_owner';
+    console.log('[Bootstrap] Email allowlist match.', { email, role });
+    
+    await db.collection('users').doc(uid).set({
+      email,
+      displayName: displayName || email.split('@')[0],
+      role: role,
+      isInternal: true,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    await db.collection('activityLogs').add({
+      userId: uid,
+      email: email,
+      action: 'USER_PROVISIONED',
+      details: { role, domain, method: 'email-allowlist' },
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return { status: 'success', role };
+  }
+
+  // 4. Check Domain Allowlist (Internal Admins)
+  const domainSnap = await db.collection('domainAllowlist')
+    .where('domain', '==', domain)
+    .limit(1)
+    .get();
+
+  if (!domainSnap.empty) {
+    const role = domainSnap.docs[0].data().role || 'internal_admin';
+    console.log('[Bootstrap] Domain allowlist match.', { domain, role });
+
+    await db.collection('users').doc(uid).set({
+      email,
+      displayName: displayName || email.split('@')[0],
+      role: role,
+      isInternal: true,
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    await db.collection('activityLogs').add({
+      userId: uid,
+      email: email,
+      action: 'USER_PROVISIONED',
+      details: { role, domain, method: 'domain-allowlist' },
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    return { status: 'success', role };
+  }
+
+  // 5. Access Denied
+  console.warn('[Bootstrap] Access denied: Not in allowlist.', { email, domain });
+  await db.collection('activityLogs').add({
+    userId: uid,
+    email: email,
+    action: 'ACCESS_DENIED_UNRECOGNIZED',
+    details: { domain },
+    timestamp: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  throw new functions.https.HttpsError('permission-denied', 'Account not authorized for internal access.', {
+    error: 'ACCESS_DENIED',
+    message: 'Your account is not recognized as an internal administrator.'
+  });
+}
 
 // Backend-controlled provisioning on first successful verified login
 export const bootstrapUser = functions.https.onCall(async (data, context) => {
@@ -27,113 +135,15 @@ export const bootstrapUser = functions.https.onCall(async (data, context) => {
   const email = context.auth.token.email;
   const emailVerified = context.auth.token.email_verified;
   const uid = context.auth.uid;
+  const displayName = context.auth.token.name || '';
 
   if (!email) {
     console.error('[Bootstrap] Email missing from token.', { uid });
     throw new functions.https.HttpsError('invalid-argument', 'User email missing.');
   }
 
-  const db = admin.firestore('twg-db-terms');
-  const domain = email.split('@')[1];
-
   try {
-    // 2. Check if already provisioned
-    const userDoc = await db.collection('users').doc(uid).get();
-    if (userDoc.exists && userDoc.data()?.role) {
-      console.log('[Bootstrap] User already provisioned.', { uid, email, role: userDoc.data()?.role });
-      return { status: 'already_provisioned', role: userDoc.data()?.role };
-    }
-
-    // 3. Require Email Verification
-    if (!emailVerified) {
-      console.warn('[Bootstrap] Email not verified.', { uid, email });
-      await db.collection('activityLogs').add({
-        userId: uid,
-        email: email,
-        action: 'PROVISIONING_SKIPPED_UNVERIFIED',
-        details: { domain },
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      throw new functions.https.HttpsError('failed-precondition', 'Email must be verified before provisioning.', {
-        error: 'UNVERIFIED_EMAIL',
-        message: 'Your email address is not yet verified. Please click the link in your inbox.'
-      });
-    }
-
-    // 4. Check Email Allowlist (System Owners)
-    const emailSnap = await db.collection('emailAllowlist')
-      .where('email', '==', email)
-      .limit(1)
-      .get();
-
-    if (!emailSnap.empty) {
-      const role = emailSnap.docs[0].data().role || 'system_owner';
-      console.log('[Bootstrap] Email allowlist match.', { email, role });
-      
-      await db.collection('users').doc(uid).set({
-        email,
-        displayName: context.auth.token.name || email.split('@')[0],
-        role: role,
-        isInternal: true,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      await db.collection('activityLogs').add({
-        userId: uid,
-        email: email,
-        action: 'USER_PROVISIONED',
-        details: { role, domain, method: 'email-allowlist' },
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      return { status: 'success', role };
-    }
-
-    // 5. Check Domain Allowlist (Internal Admins)
-    const domainSnap = await db.collection('domainAllowlist')
-      .where('domain', '==', domain)
-      .limit(1)
-      .get();
-
-    if (!domainSnap.empty) {
-      const role = domainSnap.docs[0].data().role || 'internal_admin';
-      console.log('[Bootstrap] Domain allowlist match.', { domain, role });
-
-      await db.collection('users').doc(uid).set({
-        email,
-        displayName: context.auth.token.name || email.split('@')[0],
-        role: role,
-        isInternal: true,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      await db.collection('activityLogs').add({
-        userId: uid,
-        email: email,
-        action: 'USER_PROVISIONED',
-        details: { role, domain, method: 'domain-allowlist' },
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      });
-
-      return { status: 'success', role };
-    }
-
-    // 6. Access Denied
-    console.warn('[Bootstrap] Access denied: Not in allowlist.', { email, domain });
-    await db.collection('activityLogs').add({
-      userId: uid,
-      email: email,
-      action: 'ACCESS_DENIED_UNRECOGNIZED',
-      details: { domain },
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    throw new functions.https.HttpsError('permission-denied', 'Account not authorized for internal access.', {
-      error: 'ACCESS_DENIED',
-      message: 'Your account is not recognized as an internal administrator.'
-    });
-
+    return await provisionUserCore(uid, email, !!emailVerified, displayName);
   } catch (error: any) {
     console.error('[Bootstrap] Error:', error);
     if (error instanceof functions.https.HttpsError) throw error;
@@ -141,12 +151,73 @@ export const bootstrapUser = functions.https.onCall(async (data, context) => {
   }
 });
 
+// New CORS-safe onRequest wrapper for bootstrapUser
+export const bootstrapUserOnRequest = functions.https.onRequest(async (req, res) => {
+  return cors(req, res, async () => {
+    try {
+      if (req.method === 'OPTIONS') {
+        return res.status(204).send('');
+      }
+
+      if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'METHOD_NOT_ALLOWED', message: 'Only POST is allowed' });
+      }
+
+      const authHeader = req.get('Authorization') || '';
+      const idToken = authHeader.startsWith('Bearer ') ? authHeader.substring(7) : null;
+      
+      if (!idToken) {
+        return res.status(401).json({ error: 'UNAUTHENTICATED', message: 'Missing auth token' });
+      }
+
+      const decoded = await admin.auth().verifyIdToken(idToken).catch(err => {
+        console.error('Token verify failed', err);
+        return null;
+      });
+
+      if (!decoded) {
+        return res.status(401).json({ error: 'UNAUTHENTICATED', message: 'Invalid auth token' });
+      }
+
+      const result = await provisionUserCore(
+        decoded.uid,
+        decoded.email || '',
+        !!decoded.email_verified,
+        decoded.name || ''
+      );
+
+      return res.status(200).json(result);
+    } catch (err: any) {
+      console.error('bootstrapUserOnRequest error:', err);
+      
+      // Map HttpsError to appropriate HTTP status codes
+      if (err instanceof functions.https.HttpsError) {
+        let status = 500;
+        switch (err.code) {
+          case 'unauthenticated': status = 401; break;
+          case 'permission-denied': status = 403; break;
+          case 'invalid-argument': status = 400; break;
+          case 'failed-precondition': status = 412; break;
+          case 'not-found': status = 404; break;
+          case 'already-exists': status = 409; break;
+        }
+        return res.status(status).json({ 
+          error: err.details?.error || err.code, 
+          message: err.details?.message || err.message 
+        });
+      }
+      
+      return res.status(500).json({ error: 'internal', message: err.message || 'Internal error' });
+    }
+  });
+});
+
 // Helper to check if caller is an admin
 const checkAdmin = async (context: functions.https.CallableContext) => {
   if (!context.auth) {
     throw new functions.https.HttpsError('unauthenticated', 'User must be logged in.');
   }
-  const db = admin.firestore('twg-db-terms');
+  const db = admin.firestore(FIRESTORE_DB_ID);
   const userDoc = await db.collection('users').doc(context.auth.uid).get().catch(err => {
     console.error('Error fetching user profile:', err);
     throw new functions.https.HttpsError('internal', `Database connection error: ${err.message}`);
@@ -1981,7 +2052,7 @@ export const validateAccessLink = functions.https.onCall(async (data, context) =
   const { token } = data;
   if (!token) throw new functions.https.HttpsError('invalid-argument', 'Token required.');
 
-  const db = admin.firestore();
+  const db = admin.firestore('ai-studio-7f7e1759-b77e-4f63-8e6f-59ee278b22ac');
   const linksSnap = await db.collection('accessLinks')
     .where('token', '==', token)
     .where('status', '==', 'active')

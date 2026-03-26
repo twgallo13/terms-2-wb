@@ -15,6 +15,7 @@ import {
 } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 import { auth, db, functions } from './firebase';
+import firebaseConfig from '../../firebase-applet-config.json';
 
 export { auth, db, functions };
 
@@ -32,28 +33,61 @@ export async function bootstrapInternalUser() {
   }
 
   try {
-    console.log('[AuthService] Calling bootstrapUser Cloud Function...', { uid: auth.currentUser.uid, email: auth.currentUser.email });
-    const bootstrap = httpsCallable(functions, 'bootstrapUser');
-    const result = await bootstrap();
-    console.log('[AuthService] bootstrapUser Cloud Function success:', result.data);
+    console.log('[AuthService] Calling bootstrapUserOnRequest Cloud Function...', { uid: auth.currentUser.uid, email: auth.currentUser.email });
     
-    const data = result.data as { status: string; role?: string };
+    const idToken = await auth.currentUser.getIdToken();
+    const projectId = firebaseConfig.projectId;
+    const region = 'us-central1';
+    const url = `https://${region}-${projectId}.cloudfunctions.net/bootstrapUserOnRequest`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${idToken}`
+      }
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.error('[AuthService] bootstrapUserOnRequest error response:', errorData);
+      
+      if (response.status === 403 || errorData.error === 'ACCESS_DENIED') {
+        throw new Error(JSON.stringify({ 
+          error: 'ACCESS_DENIED', 
+          message: errorData.message || 'Your account is not authorized for internal access.' 
+        }));
+      }
+      
+      throw new Error(JSON.stringify({ 
+        error: errorData.error || 'internal', 
+        message: errorData.message || 'Provisioning failed.' 
+      }));
+    }
+
+    const data = await response.json();
+    console.log('[AuthService] bootstrapUserOnRequest success:', data);
+    
     if (data.status === 'denied') {
       console.warn('[AuthService] Bootstrap denied by server policy.');
-      throw new Error(JSON.stringify({ error: 'ACCESS_DENIED', message: 'Your account is not authorized for internal access.' }));
+      throw new Error(JSON.stringify({ 
+        error: 'ACCESS_DENIED', 
+        message: 'Your account is not authorized for internal access.' 
+      }));
     }
     
     return data;
   } catch (error: any) {
-    console.error('[AuthService] bootstrapUser Cloud Function error:', {
-      code: error.code,
-      message: error.message,
-      details: error.details
-    });
+    console.error('[AuthService] bootstrapUserOnRequest error:', error);
     
-    if (error.code === 'permission-denied') {
-      throw new Error(JSON.stringify({ error: 'PERMISSION_DENIED', message: error.message }));
+    // If it's already a JSON string error we threw above, just re-throw it
+    try {
+      const parsed = JSON.parse(error.message);
+      if (parsed.error) throw error;
+    } catch (e) {
+      // Not a JSON error, continue
     }
+
     throw error;
   }
 }
