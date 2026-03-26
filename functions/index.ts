@@ -27,7 +27,7 @@ async function provisionUserCore(uid: string, email: string, emailVerified: bool
   const domain = email.split('@')[1];
 
   // 1. Check if already provisioned
-  const userDoc = await db.collection('users').doc(uid).get();
+  const userDoc = await db.collection('userProfiles').doc(uid).get();
   if (userDoc.exists && userDoc.data()?.role) {
     console.log('[Bootstrap] User already provisioned.', { uid, email, role: userDoc.data()?.role });
     return { status: 'already_provisioned', role: userDoc.data()?.role };
@@ -59,7 +59,7 @@ async function provisionUserCore(uid: string, email: string, emailVerified: bool
     const role = emailSnap.docs[0].data().role || 'system_owner';
     console.log('[Bootstrap] Email allowlist match.', { email, role });
     
-    await db.collection('users').doc(uid).set({
+    await db.collection('userProfiles').doc(uid).set({
       email,
       displayName: displayName || email.split('@')[0],
       role: role,
@@ -89,7 +89,7 @@ async function provisionUserCore(uid: string, email: string, emailVerified: bool
     const role = domainSnap.docs[0].data().role || 'internal_admin';
     console.log('[Bootstrap] Domain allowlist match.', { domain, role });
 
-    await db.collection('users').doc(uid).set({
+    await db.collection('userProfiles').doc(uid).set({
       email,
       displayName: displayName || email.split('@')[0],
       role: role,
@@ -224,7 +224,7 @@ const checkAdmin = async (context: functions.https.CallableContext) => {
     throw new functions.https.HttpsError('unauthenticated', 'User must be logged in.');
   }
   const db = admin.firestore(FIRESTORE_DB_ID);
-  const userDoc = await db.collection('users').doc(context.auth.uid).get().catch(err => {
+  const userDoc = await db.collection('userProfiles').doc(context.auth.uid).get().catch(err => {
     console.error('Error fetching user profile:', err);
     throw new functions.https.HttpsError('internal', `Database connection error: ${err.message}`);
   });

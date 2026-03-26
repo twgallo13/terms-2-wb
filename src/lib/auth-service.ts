@@ -273,7 +273,7 @@ export async function signInWithLink(email: string, link: string) {
 }
 
 export async function getUserProfile(uid: string): Promise<UserProfile | null> {
-  const userRef = doc(db, 'users', uid);
+  const userRef = doc(db, 'userProfiles', uid);
   const userSnap = await getDoc(userRef);
   
   if (userSnap.exists()) {
