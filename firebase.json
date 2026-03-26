@@ -1,6 +1,6 @@
 {
   "firestore": {
-    "database": "ai-studio-7f7e1759-b77e-4f63-8e6f-59ee278b22ac",
+    "database": "twg-db-terms",
     "rules": "firestore.rules",
     "indexes": "firestore.indexes.json"
   },

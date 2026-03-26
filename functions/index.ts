@@ -7,7 +7,7 @@ const cors = corsModule({ origin: true });
 
 admin.initializeApp();
 
-const FIRESTORE_DB_ID = 'ai-studio-7f7e1759-b77e-4f63-8e6f-59ee278b22ac';
+const FIRESTORE_DB_ID = 'twg-db-terms';
 
 // Log account creation (unverified)
 export const onUserCreate = functions.auth.user().onCreate(async (user) => {
@@ -154,6 +154,12 @@ export const bootstrapUser = functions.https.onCall(async (data, context) => {
 // New CORS-safe onRequest wrapper for bootstrapUser
 export const bootstrapUserOnRequest = functions.https.onRequest(async (req, res) => {
   return cors(req, res, async () => {
+    // Ensure explicit headers for extra safety
+    const origin = req.get('Origin') || '*';
+    res.set('Access-Control-Allow-Origin', origin);
+    res.set('Access-Control-Allow-Methods', 'POST, OPTIONS');
+    res.set('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
     try {
       if (req.method === 'OPTIONS') {
         return res.status(204).send('');
@@ -2052,7 +2058,7 @@ export const validateAccessLink = functions.https.onCall(async (data, context) =
   const { token } = data;
   if (!token) throw new functions.https.HttpsError('invalid-argument', 'Token required.');
 
-  const db = admin.firestore('ai-studio-7f7e1759-b77e-4f63-8e6f-59ee278b22ac');
+  const db = admin.firestore(FIRESTORE_DB_ID);
   const linksSnap = await db.collection('accessLinks')
     .where('token', '==', token)
     .where('status', '==', 'active')
